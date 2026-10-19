@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitoring Lab RPL</title>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+:root{--bg:#eef2ef;--ink:#12262b;--mute:#5d7076;--card:#fff;--line:#d5ded9;--t:#b8660a;--h:#0b7a8c}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1b1e;--ink:#e6efec;--mute:#93a8ad;--card:#16282c;--line:#27403f;--t:#f0a24a;--h:#4cc3d4}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Figtree,system-ui,sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 48px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-size:1.4rem;margin:0}
+#status{font-size:.9rem;color:var(--mute)}
+#status i{display:inline-block;width:9px;height:9px;border-radius:50%;background:#999;margin-right:6px}
+#status.on i{background:#1fa463}#status.off i{background:#d33}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
+.card small{color:var(--mute)}
+.val{font-size:clamp(2.4rem,9vw,4rem);font-weight:800;line-height:1.1}
+#t{color:var(--t)}#h{color:var(--h)}
+.chart{height:300px}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--mute);font-weight:600}
+.wrap{max-height:320px;overflow:auto;margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+<header><h1>Suhu &amp; Kelembapan Lab RPL</h1><div id="status"><i></i><span>Menunggu data…</span></div></header>
+<section class="cards">
+  <div class="card"><small>Suhu</small><div class="val" id="t">--</div></div>
+  <div class="card"><small>Kelembapan</small><div class="val" id="h">--</div></div>
+</section>
+<section class="card"><div class="chart"><canvas id="chart"></canvas></div></section>
+<section class="card" style="margin-top:12px"><strong>Riwayat 20 data terakhir</strong>
+  <div class="wrap"><table><thead><tr><th>Waktu</th><th>Suhu (°C)</th><th>Kelembapan (%)</th></tr></thead><tbody id="rows"></tbody></table></div>
+</section>
+</main>
+<script>
+// ====== ISI BAGIAN INI ======
+   const SUPABASE_URL = "https://lhpubvtrylglspnrtmgd.supabase.co";
+   const SUPABASE_KEY = "sb_publishable_X-XOJOEFoVkXc2k7SFlI-w_v7bn_VmD";
+// ============================
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+const fmt = d => new Date(d).toLocaleTimeString("id-ID");
+
+const chart = new Chart($("chart"), {
+  type: "line",
+  data: { labels: [], datasets: [
+    { label: "Suhu (°C)", data: [], borderColor: "#c9740f", tension: .3, yAxisID: "y" },
+    { label: "Kelembapan (%)", data: [], borderColor: "#0b7a8c", tension: .3, yAxisID: "y1" }
+  ]},
+  options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+    scales: { y: { title: { display: true, text: "°C" } }, y1: { position: "right", title: { display: true, text: "% RH" }, grid: { drawOnChartArea: false } } } }
+});
+
+let lastTime = null;
+function render(rows) {              // rows: urut terbaru -> terlama
+  if (!rows.length) return;
+  const last = rows[0];
+  lastTime = new Date(last.created_at);
+  $("t").textContent = last.temperature.toFixed(1) + " °C";
+  $("h").textContent = last.humidity.toFixed(1) + " %";
+  const asc = [...rows].reverse();
+  chart.data.labels = asc.map(r => fmt(r.created_at));
+  chart.data.datasets[0].data = asc.map(r => r.temperature);
+  chart.data.datasets[1].data = asc.map(r => r.humidity);
+  chart.update("none");
+  $("rows").innerHTML = rows.slice(0, 20).map(r =>
+    `<tr><td>${new Date(r.created_at).toLocaleString("id-ID")}</td><td>${r.temperature.toFixed(1)}</td><td>${r.humidity.toFixed(1)}</td></tr>`).join("");
+  checkStatus();
+}
+function checkStatus() {
+  if (!lastTime) return;
+  const age = (Date.now() - lastTime) / 1000, el = $("status");
+  const ok = age < 30;
+  el.className = ok ? "on" : "off";
+  el.lastElementChild.textContent = ok ? "Perangkat online · data " + fmt(lastTime) : "Perangkat tidak mengirim data sejak " + fmt(lastTime);
+}
+async function load() {
+  const { data, error } = await db.from("sensor_data").select("*").order("created_at", { ascending: false }).limit(50);
+  if (error) { $("status").lastElementChild.textContent = "Gagal memuat: " + error.message; return; }
+  render(data);
+}
+load();
+setInterval(load, 3000);            // auto-refresh cadangan (polling)
+setInterval(checkStatus, 5000);
+db.channel("live").on("postgres_changes", { event: "INSERT", schema: "public", table: "sensor_data" }, load).subscribe();  // WebSocket realtime
+</script>
+</body>
+</html>
